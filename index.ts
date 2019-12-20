@@ -77,6 +77,10 @@ function getDestinatario(santa: number): string {
 	return localStorage.getItem("destinatario_for_" + santa);
 }
 
+function getUserIds(): string[] {
+	return localStorage._keys.filter(it => /^[0-9]+$/.test(it));
+}
+
 bot.onText(/^\/(start|help)$/, async msg => {
 	let helpText = `<b>Massimo Boldi</b> - il bot del Secret Santa di r/italy
 
@@ -88,7 +92,8 @@ Lista di comandi:
 		helpText += `\n\nComandi admin:
 
 	- /status: consulta lo stato di ciascun utente
-	- /match: chiudi le iscrizioni e matcha gli utenti`;
+	- /match: chiudi le iscrizioni e matcha gli utenti
+	- /broadcast: invia un messaggio a tutti gli utenti iscritti`;
 	await reply(msg, helpText);
 });
 
@@ -108,7 +113,7 @@ bot.onText(/^\/owo$/i, async msg => {
 
 bot.onText(/^\/status$/, async msg => {
 	if (msg.from.id !== OWNER_ID) return;
-	const userIDs = localStorage._keys.filter(it => /^[0-9]+$/.test(it));
+	const userIDs = getUserIds();
 	const globalState = `Global state: ${getState()}\nUser count: ${userIDs.length}`;
 	const userStatus = userIDs.map(_id => {
 		const id = Number(_id);
@@ -149,7 +154,7 @@ bot.onText(/^\/match$/, async msg => {
 	 * matching each user with the successor, so that the constraint doesn't
 	 * fail except when there are only two users.
 	*/
-	const userIDs: string[] = shuffle(localStorage._keys.filter(it => /^[0-9]+$/.test(it)));
+	const userIDs: string[] = shuffle(getUserIds());
 	for (let i = 0; i < userIDs.length; i++) {
 		const santa = Number(userIDs[i]);
 		const destinatario = Number(userIDs[(i + 1) % userIDs.length]);
@@ -168,6 +173,15 @@ Per parlare con il tuo 📤 destinatario o con il tuo 🎅 Santa, mandami sempli
 	}
 	setState(STATE_SENDING_GIFTS);
 	await reply(msg, "Fatto. Manda /status per verificare che non ci siano problemi.");
+});
+
+bot.onText(/^\/broadcast$/, async msg => await reply(msg, "Sintassi: /broadcast messaggio"));
+bot.onText(/^\/broadcast (.+)$/, async (msg, matches) => {
+	if (msg.from.id !== OWNER_ID) return;
+	const broadcast_content = matches[1];
+	for (const id of getUserIds())
+		await bot.sendMessage(id, broadcast_content, {parse_mode: "HTML"});
+	await reply(msg, "Fatto.");
 });
 
 const messageQueue: {[user: number]: string} = {}

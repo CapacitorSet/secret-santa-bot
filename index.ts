@@ -96,7 +96,8 @@ Lista di comandi:
 
 	- /status: consulta lo stato di ciascun utente
 	- /match: chiudi le iscrizioni e matcha gli utenti
-	- /broadcast: invia un messaggio a tutti gli utenti iscritti`;
+	- /broadcast: invia un messaggio a tutti gli utenti iscritti
+	- /dump: fai il dump delle coppie (in un formato valido per <code>blacklist.txt</code>)`;
 	await reply(msg, helpText);
 });
 
@@ -170,6 +171,7 @@ function shuffle<T>(a: T[]): T[] {
 }
 
 bot.onText(/^\/match$/, async msg => {
+	// todo: aggiungere il supporto a blacklist.txt
 	if (msg.from.id !== OWNER_ID) return;
 	if (getState() != STATE_OPEN)
 		return reply(msg, `Stato non valido: impossibile avviare i match in ${getState()}`);
@@ -206,6 +208,14 @@ bot.onText(/^\/broadcast (.+)$/, async (msg, matches) => {
 	for (const id of getUserIds())
 		await bot.sendMessage(id, broadcast_content, {parse_mode: "HTML"});
 	await reply(msg, "Fatto.");
+});
+
+bot.onText(/^\/dump$/, async msg => {
+	if (msg.from.id !== OWNER_ID) return;
+	await reply(msg, getUserIds().map(santa => {
+		const destinatario = getDestinatario(Number(santa));
+		return santa + ";" + destinatario;
+	}).join("\n"));
 });
 
 const messageQueue: {[user: number]: string} = {}

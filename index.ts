@@ -1,24 +1,11 @@
 import assert = require("assert");
 import fs = require("fs");
-const LocalStorage = require("node-localstorage").LocalStorage;
-const localStorage : {
-	_keys: string[],
-	getItem(key: string): string,
-	setItem(key: string, value: string): void,
-} = new LocalStorage("./localstorage/");
+import {localStorage} from "./storage";
 import TelegramBot = require("node-telegram-bot-api");
 import graphviz = require("graphviz");
-import winston = require("winston");
+import {logger} from "./logger";
 import {State, StateEnum} from "./controller/state";
-
-const logger = winston.createLogger({
-	level: "debug",
-	format: winston.format.simple(),
-	transports: [
-		new winston.transports.File({ filename: "error.log", level: "error" }),
-		new winston.transports.Console({ format: winston.format.simple() })
-	]
-});
+import { User } from "./controller/user";
 
 process.on("unhandledRejection", (error: Error) => logger.error("Unhandled rejection: " + error.message));
 
@@ -37,37 +24,6 @@ function reply(msg: TelegramBot.Message, text: string, withHTML: boolean = true,
 	if (others)
 		options = Object.assign(options, others);
 	return bot.sendMessage(msg.chat.id, text, options);
-}
-
-function signUp(id: number): void {
-	localStorage.setItem("" + id, ".");
-}
-function isSignedUp(id: number): boolean {
-	return localStorage.getItem("" + id) !== null;
-}
-
-function setDescription(authorId: number, msg: TelegramBot.Message): void {
-	const descr = msg.from.first_name +
-		(msg.from.last_name ? " " + msg.from.last_name : "") +
-		(msg.from.username ? " (@" + msg.from.username + ")" : "");
-	logger.verbose(`Descrizione di ${authorId}: ${descr}`);
-	localStorage.setItem("description_" + authorId, descr);
-}
-function getDescription(authorId: number): string {
-	return localStorage.getItem("description_" + authorId);
-}
-
-function setSanta(destinatario: number, santa: number): void {
-	localStorage.setItem("santa_for_" + destinatario, "" + santa);
-}
-function getSanta(destinatario: number): string {
-	return localStorage.getItem("santa_for_" + destinatario);
-}
-function setDestinatario(santa: number, destinatario: number): void {
-	localStorage.setItem("destinatario_for_" + santa, "" + destinatario);
-}
-function getDestinatario(santa: number): string {
-	return localStorage.getItem("destinatario_for_" + santa);
 }
 
 function getUserIds(): string[] {
@@ -93,17 +49,18 @@ Lista di comandi:
 });
 
 bot.onText(/^\/owo$/i, async msg => {
-	if (isSignedUp(msg.from.id))
+	const user = new User(msg.from.id);
+	if (user.isSignedUp)
 		return reply(msg, "Sei già iscritto al Secret Santa.");
 	if (!state.open)
 		return reply(msg, "Le iscrizioni sono chiuse!");
 	if (msg.chat.id != msg.from.id)
 		return reply(msg, "Mandami il comando in chat privata per iscriverti.");
-	signUp(msg.from.id);
-	setDescription(msg.from.id, msg);
+	user.signup();
+	user.storeDescription(msg);
 	await reply(msg, "Ti sei iscritto al Secret Santa!");
-	logger.info("Nuova iscrizione: " + getDescription(msg.from.id));
-	return bot.sendMessage(OWNER_ID, getDescription(msg.from.id) + " si è iscritto!");
+	logger.info(`Nuova iscrizione: ${user.description}`);
+	return bot.sendMessage(OWNER_ID, `${user.description} si è iscritto!`);
 });
 
 /*
@@ -130,20 +87,19 @@ bot.onText(/^\/grafico$/, async msg => {
 bot.onText(/^\/status$/, async msg => {
 	if (msg.from.id !== OWNER_ID) return;
 	const userIDs = getUserIds();
-	console.log(state);
 	const globalState = `Global state: ${state.get()}\nUser count: ${userIDs.length}`;
 	const userStatus = userIDs.map(_id => {
-		const id = Number(_id);
-		let descrizione = getDescription(Number(id)) + " [" + _id + "]:\n";
-		descrizione += isSignedUp(id) ? " - Iscritto\n" : " - <b>NON</b> iscritto\n";
-		const isMatched = getDestinatario(id) !== null;
+		const user = new User(_id);
+		let descrizione = `${user.description} [${_id}]:\n`;
+		descrizione += user.isSignedUp ? " - Iscritto\n" : " - <b>NON</b> iscritto\n";
+		const isMatched = user.destinatario !== null;
 		descrizione += isMatched ? " - Matchato\n" : " - <b>NON</b> matchato\n";
 		if (isMatched) {
-			const destinatario = Number(getDestinatario(id));
-			descrizione += (getDescription(destinatario) !== null)
+			const destinatario = user.destinatario;
+			descrizione += (destinatario.description !== null)
 				? " - Destinatario valido\n"
 				: " - Destinatario <b>NON</b> valido\n";
-			descrizione += (getDestinatario(destinatario) !== _id)
+			descrizione += (destinatario.description !== _id)
 				? " - Loop ok\n"
 				: " - Loop <b>NON</b> ok\n";
 		}
@@ -174,14 +130,14 @@ bot.onText(/^\/match$/, async msg => {
 	*/
 	const userIDs: string[] = shuffle(getUserIds());
 	for (let i = 0; i < userIDs.length; i++) {
-		const santa = Number(userIDs[i]);
-		const destinatario = Number(userIDs[(i + 1) % userIDs.length]);
-		setDestinatario(santa, destinatario);
-		setSanta(destinatario, santa);
-		logger.verbose(`Match: ${santa} è il Santa di ${destinatario}`);
+		const santa = new User(userIDs[i]);
+		const destinatario = new User(userIDs[(i + 1) % userIDs.length]);
+		santa.destinatario = destinatario;
+		destinatario.santa = santa;
+		logger.verbose(`Match: ${santa} è il Santa di ${destinatario.id}`);
 		await bot.sendMessage(
-			santa,
-			`Il tuo destinatario del Secret Santa è 📤 <b>${getDescription(destinatario)}</b>. Gli dovrai fare un regalo, ma lui o lei non sa che sarai tu a farglielo!
+			santa.id,
+			`Il tuo destinatario del Secret Santa è 📤 <b>${destinatario.description}</b>. Gli dovrai fare un regalo, ma lui o lei non sa che sarai tu a farglielo!
 
 Viceversa ti è stato assegnato un 🎅 <b>Secret Santa</b>, un utente misterioso che ti farà un regalo.
 
@@ -205,7 +161,7 @@ bot.onText(/^\/broadcast (.+)$/, async (msg, matches) => {
 bot.onText(/^\/dump$/, async msg => {
 	if (msg.from.id !== OWNER_ID) return;
 	await reply(msg, getUserIds().map(santa => {
-		const destinatario = getDestinatario(Number(santa));
+		const destinatario = new User(santa).destinatario;
 		return santa + ";" + destinatario;
 	}).join("\n"));
 });
@@ -217,14 +173,15 @@ bot.on("text", msg => {
 	logger.debug(msg.from.id + ": " + msg.text);
 	if (/^\//.test(msg.text)) return;
 	if (!state.sending_gifts) return;
-	messageQueue[msg.from.id] = msg.text;
-	const descrDestinatario = getDescription(Number(getDestinatario(msg.from.id)));
-	return reply(msg, `Vuoi mandare il messaggio al tuo 🎅 Santa (l'utente misterioso che ti manderà il regalo) o al tuo destinatario 📤 ${descrDestinatario}?`, true, {
+	const author = new User(msg.from.id);
+	messageQueue[author.id] = msg.text;
+	const destinatario = author.destinatario;
+	return reply(msg, `Vuoi mandare il messaggio al tuo 🎅 Santa (l'utente misterioso che ti manderà il regalo) o al tuo destinatario 📤 ${destinatario.description}?`, true, {
 		reply_markup: { inline_keyboard: [[{
 			text: "🎅 Santa",
 			callback_data: "santa"
 		}], [{
-			text: "📤 " + descrDestinatario,
+			text: "📤 " + destinatario.description,
 			callback_data: "destinatario"
 		}]] }
 	});
@@ -233,15 +190,16 @@ bot.on("text", msg => {
 bot.on("photo", async msg => {
 	if (!("photo" in msg)) return;
 	if (!state.sending_gifts) return;
-	picsQueue[msg.from.id] = msg.photo[msg.photo.length - 1].file_id;
-	messageQueue[msg.from.id] = msg.caption || "";
-	const descrDestinatario = getDescription(Number(getDestinatario(msg.from.id)));
-	await reply(msg, `Vuoi mandare il messaggio al tuo 🎅 Santa (l'utente misterioso che ti manderà il regalo) o al tuo destinatario 📤 ${descrDestinatario}?`, true, {
+	const author = new User(msg.from.id);
+	picsQueue[author.id] = msg.photo[msg.photo.length - 1].file_id;
+	messageQueue[author.id] = msg.caption || "";
+	const destinatario = author.destinatario;
+	await reply(msg, `Vuoi mandare il messaggio al tuo 🎅 Santa (l'utente misterioso che ti manderà il regalo) o al tuo destinatario 📤 ${destinatario.description}?`, true, {
 		reply_markup: { inline_keyboard: [[{
 			text: "🎅 Santa",
 			callback_data: "santa_pic"
 		}], [{
-			text: "📤 " + descrDestinatario,
+			text: "📤 " + destinatario.description,
 			callback_data: "destinatario_pic"
 		}]] }
 	});
@@ -249,37 +207,38 @@ bot.on("photo", async msg => {
 
 bot.on("callback_query", async query => {
 	logger.debug(`Callback query: data=${query.data}, from=${query.from.id}`);
+	const author = new User(query.from.id);
 	switch (query.data) {
 		case "santa":
-			await bot.sendMessage(getSanta(query.from.id), `Messaggio dal tuo 📤 destinatario ${getDescription(query.from.id)}:\n\n${messageQueue[query.from.id]}`);
-			logger.debug(`Sent ${messageQueue[query.from.id]} to ${getSanta(query.from.id)}`);
+			await bot.sendMessage(author.santa.id, `Messaggio dal tuo 📤 destinatario ${author.description}:\n\n${messageQueue[query.from.id]}`);
+			logger.debug(`Sent ${messageQueue[query.from.id]} to ${author.santa.id}`);
 			// delete messageQueue[query.from.id];
 			await bot.answerCallbackQuery(query.id, {text: "Inviato al tuo 🎅 Santa."});
 			await bot.editMessageText("Inviato al tuo 🎅 Santa.", {chat_id: query.message.chat.id, message_id: query.message.message_id})
 			break;
 		case "destinatario":
-			await bot.sendMessage(getDestinatario(query.from.id), "Messaggio dal tuo 🎅 Santa:\n\n" + messageQueue[query.from.id]);
-			logger.debug(`Sent ${messageQueue[query.from.id]} to ${getDestinatario(query.from.id)}`);
+			await bot.sendMessage(author.destinatario.id, "Messaggio dal tuo 🎅 Santa:\n\n" + messageQueue[query.from.id]);
+			logger.debug(`Sent ${messageQueue[query.from.id]} to ${author.destinatario.id}`);
 			// delete messageQueue[query.from.id];
 			await bot.answerCallbackQuery(query.id, {text: "Inviato al tuo 📤 destinatario."});
 			await bot.editMessageText("Inviato al tuo 📤 destinatario.", {chat_id: query.message.chat.id, message_id: query.message.message_id})
 			break;
 		case "santa_pic":
-			await bot.sendMessage(getSanta(query.from.id), `Messaggio dal tuo 📤 destinatario ${getDescription(query.from.id)}:`);
-			await bot.sendPhoto(getSanta(query.from.id), picsQueue[query.from.id], {
+			await bot.sendMessage(author.santa.id, `Messaggio dal tuo 📤 destinatario ${author.description}:`);
+			await bot.sendPhoto(author.santa.id, picsQueue[query.from.id], {
 				caption: messageQueue[query.from.id]
 			});
-			logger.debug(`Sent ${messageQueue[query.from.id]} (with pic) to ${getSanta(query.from.id)}`);
+			logger.debug(`Sent ${messageQueue[query.from.id]} (with pic) to ${author.santa.id}`);
 			// delete messageQueue[query.from.id];
 			bot.answerCallbackQuery(query.id, {text: "Inviato al tuo 🎅 Santa."});
 			bot.editMessageText("Inviato al tuo 🎅 Santa.", {chat_id: query.message.chat.id, message_id: query.message.message_id})
 			break;
 		case "destinatario_pic":
-			await bot.sendMessage(getDestinatario(query.from.id), "Messaggio dal tuo 🎅 Santa:");
-			await bot.sendPhoto(getDestinatario(query.from.id), picsQueue[query.from.id], {
+			await bot.sendMessage(author.destinatario.id, "Messaggio dal tuo 🎅 Santa:");
+			await bot.sendPhoto(author.destinatario.id, picsQueue[query.from.id], {
 				caption: messageQueue[query.from.id]
 			});
-			logger.debug(`Sent ${messageQueue[query.from.id]} (with pic) to ${getDestinatario(query.from.id)}`);
+			logger.debug(`Sent ${messageQueue[query.from.id]} (with pic) to ${author.destinatario.id}`);
 			// delete messageQueue[query.from.id];
 			await bot.answerCallbackQuery(query.id, {text: "Inviato al tuo 📤 destinatario."});
 			await bot.editMessageText("Inviato al tuo 📤 destinatario.", {chat_id: query.message.chat.id, message_id: query.message.message_id})

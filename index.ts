@@ -1,4 +1,5 @@
 import assert = require("assert");
+import fs = require("fs");
 const LocalStorage = require("node-localstorage").LocalStorage;
 const localStorage : {
 	_keys: string[],
@@ -6,6 +7,7 @@ const localStorage : {
 	setItem(key: string, value: string): void,
 } = new LocalStorage("./localstorage/");
 import TelegramBot = require("node-telegram-bot-api");
+import graphviz = require("graphviz");
 import winston = require("winston");
 
 const logger = winston.createLogger({
@@ -88,6 +90,7 @@ Lista di comandi:
 
 	- /help: manda la lista di comandi
 	- /owo: iscriviti al Secret Santa`;
+	// - /grafico: manda il grafico dei santa`;
 	if (msg.from.id == OWNER_ID)
 		helpText += `\n\nComandi admin:
 
@@ -110,6 +113,27 @@ bot.onText(/^\/owo$/i, async msg => {
 	logger.info("Nuova iscrizione: " + getDescription(msg.from.id));
 	return bot.sendMessage(OWNER_ID, getDescription(msg.from.id) + " si è iscritto!");
 });
+
+/*
+Todo: scriverlo, ma in base alle guess di ciascuno su chi sia il proprio Santa
+bot.onText(/^\/grafico$/, async msg => {
+	const graph = graphviz.digraph("G");
+	for (const _id of getUserIds()) {
+		const id = Number(_id);
+		graph.addNode(_id, {label: getDescription(id)});
+		const destinatario = getDestinatario(id);
+		if (destinatario !== null)
+			graph.addEdge(_id, destinatario);
+	}
+	graph.render({
+		type: "png",
+		use: "neato"
+	 }, "/tmp/santa.png");
+	await bot.sendPhoto(msg.chat.id, fs.createReadStream("/tmp/santa.png"), {
+		reply_to_message_id: msg.message_id
+	});
+});
+*/
 
 bot.onText(/^\/status$/, async msg => {
 	if (msg.from.id !== OWNER_ID) return;

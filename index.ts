@@ -77,20 +77,20 @@ function getDestinatario(santa: number): string {
 	return localStorage.getItem("destinatario_for_" + santa);
 }
 
-const helpText = `<b>Massimo Boldi</b> - il bot del Secret Santa di r/italy
-	
+bot.onText(/^\/(start|help)$/, async msg => {
+	let helpText = `<b>Massimo Boldi</b> - il bot del Secret Santa di r/italy
+
 Lista di comandi:
 
- - /help: manda la lista di comandi
- - /owo: iscriviti al Secret Santa
+	- /help: manda la lista di comandi
+	- /owo: iscriviti al Secret Santa`;
+	if (msg.from.id == OWNER_ID)
+		helpText += `\n\nComandi admin:
 
-Comandi admin:
-
- - /status: consulta lo stato di ciascun utente
- - /match: chiudi le iscrizioni e matcha gli utenti`;
-
-bot.onText(/^\/start$/, msg => reply(msg, helpText));
-bot.onText(/^\/help$/, msg => reply(msg, helpText));
+	- /status: consulta lo stato di ciascun utente
+	- /match: chiudi le iscrizioni e matcha gli utenti`;
+	await reply(msg, helpText);
+});
 
 bot.onText(/^\/owo$/i, async msg => {
 	if (isSignedUp(msg.from.id))

@@ -9,6 +9,7 @@ const localStorage : {
 import TelegramBot = require("node-telegram-bot-api");
 import graphviz = require("graphviz");
 import winston = require("winston");
+import {State, StateEnum} from "./controller/state";
 
 const logger = winston.createLogger({
 	level: "debug",
@@ -27,17 +28,7 @@ assert("OWNER_ID" in process.env);
 const OWNER_ID: number = Number(process.env.OWNER_ID);
 const bot = new TelegramBot(token, {polling: true});
 
-const STATE_OPEN = "STATE_OPEN",
-	STATE_SENDING_GIFTS = "STATE_SENDING_GIFTS";
-if (localStorage.getItem("global_state") === null)
-	localStorage.setItem("global_state", STATE_OPEN);
-
-function getState(): string {
-	return localStorage.getItem("global_state");
-}
-function setState(state: "STATE_OPEN" | "STATE_SENDING_GIFTS"): void {
-	localStorage.setItem("global_state", state);
-}
+const state = new State(localStorage);
 
 function reply(msg: TelegramBot.Message, text: string, withHTML: boolean = true, others?: TelegramBot.SendMessageOptions): Promise<TelegramBot.Message> {
 	let options: TelegramBot.SendMessageOptions = {reply_to_message_id: msg.message_id};
@@ -104,7 +95,7 @@ Lista di comandi:
 bot.onText(/^\/owo$/i, async msg => {
 	if (isSignedUp(msg.from.id))
 		return reply(msg, "Sei già iscritto al Secret Santa.");
-	if (getState() != STATE_OPEN)
+	if (!state.open)
 		return reply(msg, "Le iscrizioni sono chiuse!");
 	if (msg.chat.id != msg.from.id)
 		return reply(msg, "Mandami il comando in chat privata per iscriverti.");
@@ -139,7 +130,8 @@ bot.onText(/^\/grafico$/, async msg => {
 bot.onText(/^\/status$/, async msg => {
 	if (msg.from.id !== OWNER_ID) return;
 	const userIDs = getUserIds();
-	const globalState = `Global state: ${getState()}\nUser count: ${userIDs.length}`;
+	console.log(state);
+	const globalState = `Global state: ${state.get()}\nUser count: ${userIDs.length}`;
 	const userStatus = userIDs.map(_id => {
 		const id = Number(_id);
 		let descrizione = getDescription(Number(id)) + " [" + _id + "]:\n";
@@ -173,8 +165,8 @@ function shuffle<T>(a: T[]): T[] {
 bot.onText(/^\/match$/, async msg => {
 	// todo: aggiungere il supporto a blacklist.txt
 	if (msg.from.id !== OWNER_ID) return;
-	if (getState() != STATE_OPEN)
-		return reply(msg, `Stato non valido: impossibile avviare i match in ${getState()}`);
+	if (!state.open)
+		return reply(msg, `Stato non valido: impossibile avviare i match in ${state.get()}`);
 	/* The matching algorithm must ensure that no two people are matched with
 	 * one another. This is achieved simply by shuffling the array of users and
 	 * matching each user with the successor, so that the constraint doesn't
@@ -197,7 +189,7 @@ Per parlare con il tuo 📤 destinatario o con il tuo 🎅 Santa, mandami sempli
 			{parse_mode: "HTML"}
 		);
 	}
-	setState(STATE_SENDING_GIFTS);
+	state.set(StateEnum.STATE_SENDING_GIFTS);
 	await reply(msg, "Fatto. Manda /status per verificare che non ci siano problemi.");
 });
 
@@ -224,7 +216,7 @@ const picsQueue: {[user: number]: string} = {}
 bot.on("text", msg => {
 	logger.debug(msg.from.id + ": " + msg.text);
 	if (/^\//.test(msg.text)) return;
-	if (getState() != STATE_SENDING_GIFTS) return;
+	if (!state.sending_gifts) return;
 	messageQueue[msg.from.id] = msg.text;
 	const descrDestinatario = getDescription(Number(getDestinatario(msg.from.id)));
 	return reply(msg, `Vuoi mandare il messaggio al tuo 🎅 Santa (l'utente misterioso che ti manderà il regalo) o al tuo destinatario 📤 ${descrDestinatario}?`, true, {
@@ -240,7 +232,7 @@ bot.on("text", msg => {
 
 bot.on("photo", async msg => {
 	if (!("photo" in msg)) return;
-	if (getState() != STATE_SENDING_GIFTS) return;
+	if (!state.sending_gifts) return;
 	picsQueue[msg.from.id] = msg.photo[msg.photo.length - 1].file_id;
 	messageQueue[msg.from.id] = msg.caption || "";
 	const descrDestinatario = getDescription(Number(getDestinatario(msg.from.id)));

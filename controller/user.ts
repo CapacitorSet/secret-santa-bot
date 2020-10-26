@@ -29,6 +29,15 @@ export class User {
 	signup() {
 		localStorage.setItem(this.id, ".")
 	}
+	get isEarlySignedUp(): boolean {
+		return localStorage.getItem("early_" + this.id) !== null;
+	}
+	earlySignup() {
+		localStorage.setItem("early_" + this.id, ".");
+	}
+	deleteEarlySignup() {
+		localStorage.removeItem("early_" + this.id);
+	}
 
 	get description(): string {
 		return localStorage.getItem("description_" + this.id);
@@ -41,19 +50,25 @@ export class User {
 		localStorage.setItem("description_" + this.id, descr);
 	}
 
-	get santa(): User {
+	get santa(): User | null {
 		const id = localStorage.getItem("santa_for_" + this.id);
-		return new User(id);
+		if (id === null)
+			return null;
+		else
+			return new User(id);
 	}
 	set santa(santa: User) {
-		localStorage.setItem("santa_for_", santa.id);
+		localStorage.setItem("santa_for_" + this.id, santa.id);
 	}
 
-	get destinatario(): User {
+	get destinatario(): User | null {
 		const id = localStorage.getItem("destinatario_for_" + this.id);
-		return new User(id);
+		if (id === null)
+			return null;
+		else
+			return new User(id);
 	}
 	set destinatario(destinatario: User) {
-		localStorage.setItem("destinatario_for_", destinatario.id);
+		localStorage.setItem("destinatario_for_" + this.id, destinatario.id);
 	}
 }

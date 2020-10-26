@@ -1,5 +1,9 @@
 export enum StateEnum {
-	STATE_OPEN = "STATE_OPEN",
+	/* Gli utenti possono iscriversi in via preliminare. A fine ottobre col passaggio a STATE_CONFERMA riceveranno un messaggio del tipo "Sei sicuro di voler partecipare?". */
+	STATE_PREISCRIZIONI = "STATE_PREISCRIZIONI",
+	/* Le iscrizioni sono chiuse. Gli utenti sono chiamati a confermare di voler partecipare. Il 1 novembre con la creazione dei match si passa a STATE_SENDING_GIFTS. */
+	STATE_CONFERMA = "STATE_CONFERMA",
+	/* I match sono stati fatti. */
 	STATE_SENDING_GIFTS = "STATE_SENDING_GIFTS"
 }
 
@@ -8,7 +12,8 @@ export interface IState {
 	get(): StateEnum;
 	set(s: StateEnum): void;
 
-	open: boolean;
+	preiscrizioni: boolean;
+	conferma: boolean;
 	sending_gifts: boolean;
 }
 
@@ -20,7 +25,7 @@ export class State implements IState {
 	constructor(localStorage) {
 		this.localStorage = localStorage;
 		if (this.localStorage.getItem(KEY) === null)
-			this.set(StateEnum.STATE_OPEN);
+			this.set(StateEnum.STATE_PREISCRIZIONI);
 	}
 
 	get(): StateEnum {
@@ -31,8 +36,11 @@ export class State implements IState {
 		this.localStorage.setItem(KEY, s);
 	}
 
-	get open(): boolean {
-		return this.get() === StateEnum.STATE_OPEN;
+	get preiscrizioni(): boolean {
+		return this.get() === StateEnum.STATE_PREISCRIZIONI;
+	}
+	get conferma(): boolean {
+		return this.get() === StateEnum.STATE_CONFERMA;
 	}
 	get sending_gifts(): boolean {
 		return this.get() === StateEnum.STATE_SENDING_GIFTS;

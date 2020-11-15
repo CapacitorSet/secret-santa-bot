@@ -2,7 +2,6 @@ import assert = require("assert");
 import {localStorage} from "./storage";
 import TelegramBot = require("node-telegram-bot-api");
 import Sentry = require('@sentry/node');
-// import graphviz = require("graphviz");
 import {logger} from "./logger";
 import {State, StateEnum} from "./controller/state";
 import User, { allUserIds, allUsers } from "./controller/user";
@@ -88,27 +87,6 @@ Se non l'hai già fatto manda /help per leggere le regole e il calendario.`);
 	await bot.sendMessage(OWNER_ID, `${user.description} si è iscritto!`);
 	await bot.sendMessage(GROUP_ID, `${user.description} si è iscritto!`);
 });
-
-/*
-Todo: scriverlo, ma in base alle guess di ciascuno su chi sia il proprio Santa
-bot.onText(/^\/grafico$/, async msg => {
-	const graph = graphviz.digraph("G");
-	for (const _id of getUserIds()) {
-		const id = Number(_id);
-		graph.addNode(_id, {label: getDescription(id)});
-		const destinatario = getDestinatario(id);
-		if (destinatario !== null)
-			graph.addEdge(_id, destinatario);
-	}
-	graph.render({
-		type: "png",
-		use: "neato"
-	 }, "/tmp/santa.png");
-	await bot.sendPhoto(msg.chat.id, fs.createReadStream("/tmp/santa.png"), {
-		reply_to_message_id: msg.message_id
-	});
-});
-*/
 
 function userHealthcheck(user: User): {success: boolean, status: string} {
 	try {

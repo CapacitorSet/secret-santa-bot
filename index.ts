@@ -1,12 +1,12 @@
 import assert = require("assert");
-import fs = require("fs");
 import {localStorage} from "./storage";
 import TelegramBot = require("node-telegram-bot-api");
 import Sentry = require('@sentry/node');
 // import graphviz = require("graphviz");
 import {logger} from "./logger";
 import {State, StateEnum} from "./controller/state";
-import { User } from "./controller/user";
+import User, { allUserIds, allUsers } from "./controller/user";
+import createMatches from "./matching";
 
 if ("SENTRY_DSN" in process.env)
 	Sentry.init({ dsn: process.env.SENTRY_DSN });
@@ -22,21 +22,6 @@ assert("GROUP_ID" in process.env);
 const GROUP_ID: number = Number(process.env.GROUP_ID);
 const bot = new TelegramBot(token, {polling: true});
 
-if (!fs.existsSync("./blacklist.txt"))
-	throw new Error("No blacklist present!");
-const blacklistArray: [string, string][] = fs.readFileSync("./blacklist.txt", "utf8")
-	.split("\n")
-	.filter(it => /[0-9]+ [0-9]+/.test(it))
-	.map(it => it.split(" ") as [string, string]);
-const blacklist: {[from: string]: string[]} = {};
-for (const [from, to] of blacklistArray) {
-	if (!blacklist[from])
-		blacklist[from] = [to];
-	else
-		blacklist[from].push(to);
-}
-logger.info(blacklistArray.length + " blacklist entries.");
-
 const state = new State(localStorage);
 
 function reply(msg: TelegramBot.Message, text: string, withHTML: boolean = true, others?: TelegramBot.SendMessageOptions): Promise<TelegramBot.Message> {
@@ -46,10 +31,6 @@ function reply(msg: TelegramBot.Message, text: string, withHTML: boolean = true,
 	if (others)
 		options = Object.assign(options, others);
 	return bot.sendMessage(msg.chat.id, text, options);
-}
-
-function getUserIds(): string[] {
-	return localStorage._keys.filter(it => /^(early_)?[0-9]+$/.test(it)).map(it => it.replace(/^early_/, ""));
 }
 
 bot.onText(/^\/(start|help)$/, async msg => {
@@ -129,101 +110,91 @@ bot.onText(/^\/grafico$/, async msg => {
 });
 */
 
-function userHealthcheck(id: string): {success: boolean, status: string} {
-	const user = new User(id);
-	let success = true;
-	let status = `${user.description} [${id}]:\n`;
-	if (user.isSignedUp) {
-		status += " - Iscritto\n";
-		success = success && true;
-	} else if (user.isEarlySignedUp) {
-		if (state.preiscrizioni) {
-			status += " - Preiscritto\n";
+function userHealthcheck(user: User): {success: boolean, status: string} {
+	try {
+		let success = true;
+		let status = `${user.description} [${user.id}]:\n`;
+		if (user.isSignedUp) {
+			status += " - Iscritto\n";
+			success = success && true;
+		} else if (user.isEarlySignedUp) {
+			if (state.preiscrizioni) {
+				status += " - Preiscritto\n";
+			} else {
+				status += " - Preiscritto (<b>in attesa di conferma</b>)\n";
+			}
+			success = success && true;
 		} else {
-			status += " - Preiscritto (<b>in attesa di conferma</b>)\n";
+			status += " - <b>NON</b> iscritto\n";
+			success = success && false;
 		}
-		success = success && true;
-	} else {
-		status += " - <b>NON</b> iscritto\n";
-		success = success && false;
-	}
-	const isMatched = user.destinatario !== null;
-	if (isMatched) {
-		status += " - Matchato\n";
-		success = success && true;
-	} else {
-		status += " - <b>NON</b> matchato\n";
-		success = success && (state.preiscrizioni || state.conferma);
-	}
+		const isMatched = user.destinatario !== null;
+		if (isMatched) {
+			status += " - Matchato\n";
+			success = success && true;
+		} else {
+			status += " - <b>NON</b> matchato\n";
+			success = success && (state.preiscrizioni || state.conferma);
+		}
 
-	if (isMatched) {
-		const destinatario = user.destinatario;
-		if (destinatario.description !== null) {
-			status += " - Destinatario valido\n";
-			success = success && true;
-		} else {
-			status += " - Destinatario <b>NON</b> valido\n";
-			success = success && false;
+		if (isMatched) {
+			const destinatario = user.destinatario;
+			if (destinatario.description !== null) {
+				status += " - Destinatario valido\n";
+				success = success && true;
+			} else {
+				status += " - Destinatario <b>NON</b> valido\n";
+				success = success && false;
+			}
+			if (destinatario.id === user.id) {
+				status += " - Loop <b>NON</b> ok: destinatario di sè stesso\n";
+				success = success && false;
+			} else if (destinatario.destinatario.id === user.id) {
+				status += " - Loop <b>NON</b> ok: lunghezza 2\n";
+				success = success && false;
+			} else {
+				status += " - Loop ok\n";
+				success = success && true;
+			}
 		}
-		if (destinatario.id === id) {
-			status += " - Loop <b>NON</b> ok: destinatario di sè stesso\n";
-			success = success && false;
-		} else if (destinatario.destinatario.id === id) {
-			status += " - Loop <b>NON</b> ok: lunghezza 2\n";
-			success = success && false;
-		} else {
-			status += " - Loop ok\n";
-			success = success && true;
-		}
+		return {success, status: status + "\n"};
+	} catch (e) {
+		return {success: false, status: "An error occurred: " + e + "\n"};
 	}
-	return {success, status: status + "\n"};
 }
 
 // Runs healthchecks on the chain
 function chainHealthcheck() : {success: boolean, status: string} {
-	const userIDs = getUserIds();
-	let text = "";
-	let _success = true;
-	for (const id of userIDs) {
-		const {success, status} = userHealthcheck(id);
-		_success = _success && success;
-		text += status;
-	}
-	return {success: _success, status: text};
+	const statusInfo = allUsers().map(userHealthcheck);
+	return {
+		success: statusInfo.every(({success}) => success),
+		status: statusInfo.map(({status}) => status).join("")
+	};
 }
 
 bot.onText(/^\/status$/, async msg => {
 	if (msg.from.id !== OWNER_ID) return;
-	const userIDs = getUserIds();
-	const globalState = `Global state: ${state.get()}\nUser count: ${userIDs.length}\n\n`;
-	const {success, status} = chainHealthcheck();
+	const userIDs = allUserIds();
+	const globalState = `Global state: ${state.get()}\nUser count: ${userIDs.length}\nChain count: ${matches.length}\n\n`;
+	let {success, status} = chainHealthcheck();
+	if (state.sending_gifts)
+		success = success || (userIDs.length == matches.length)
 	const successString = success ? "✅ No errors\n\n" : "❌ Errors detected\n\n";
 	await reply(msg, globalState + successString + status);
 });
 
 bot.onText(/^\/list$/, async msg => {
-	const userIDs = getUserIds();
-	const globalState = `${userIDs.length} utenti iscritti:\n\n`;
-	let text = userIDs.map(id => new User(id).description).map(descr => ` - \`${descr}\``).join("\n");
+	const users = allUsers();
+	const globalState = `${users.length} utenti iscritti:\n\n`;
+	let text = users.map(user => user.description).map(descr => ` - \`${descr}\``).join("\n");
 	await reply(msg, globalState + text, false, {parse_mode: "Markdown"});
 });
-
-function shuffle<T>(a: T[]): T[] {
-	for (let i = a.length - 1; i > 0; i--) {
-		const j = Math.floor(Math.random() * (i + 1));
-		const tmp = a[i];
-		a[i] = a[j];
-		a[j] = tmp;
-	}
-	return a;
-}
 
 bot.onText(/^\/open$/, async msg => {
 	if (msg.from.id !== OWNER_ID) return;
 	if (!state.preiscrizioni)
 		return reply(msg, `Stato non valido: impossibile avviare le preiscrizioni in ${state.get()}`);
-	for (const id of getUserIds()) {
-		const user = new User(id);
+	for (const user of allUsers()) {
 		if (!user.isEarlySignedUp)
 			continue;
 		await bot.sendMessage(user.id, "Sta per iniziare il Secret Santa di r/italy! Vuoi confermare o annullare la tua iscrizione?", {
@@ -240,13 +211,14 @@ bot.onText(/^\/open$/, async msg => {
 	await reply(msg, "Fatto!");
 });
 
+let matches: string[] = [];
+
 bot.onText(/^\/match$/, async msg => {
 	if (msg.from.id !== OWNER_ID) return;
 	if (!state.conferma)
 		return reply(msg, `Stato non valido: impossibile avviare i match in ${state.get()}`);
 	let success = true;
-	for (const id of getUserIds()) {
-		const user = new User(id);
+	for (const user of allUsers()) {
 		if (user.isEarlySignedUp) {
 			await reply(msg, `L'utente ${user.description} è ancora preiscritto! (È necessario confermare o annullare la preiscrizione)`);
 			success = false;
@@ -254,43 +226,58 @@ bot.onText(/^\/match$/, async msg => {
 	}
 	if (!success)
 		return;
-	/* The matching algorithm must ensure that no two people are matched with
-	 * one another. This is achieved simply by shuffling the array of users and
-	 * matching each user with the successor, so that the constraint doesn't
-	 * fail except when there are only two users.
-	*/
-	let userIDs: string[];
-	let shuffleSuccess = true;
-	do {
-		userIDs = shuffle(getUserIds());
-		for (let i = 0; i < userIDs.length; i++) {
-			const curID = userIDs[i];
-			const nextID = userIDs[(i + 1) % userIDs.length];
-			if (curID in blacklist && blacklist[curID].includes(nextID)) {
-				shuffleSuccess = false;
-				break;
-			}
-		}
-	} while (!shuffleSuccess);
-	for (let i = 0; i < userIDs.length; i++) {
-		const santa = new User(userIDs[i]);
-		const destinatario = new User(userIDs[(i + 1) % userIDs.length]);
+	
+	matches = await createMatches();
+
+	for (let i = 0; i < matches.length; i++) {
+		const santa = new User(matches[i]);
+		const destinatario = new User(matches[(i + 1) % matches.length]);
 		santa.destinatario = destinatario;
 		destinatario.santa = santa;
-		logger.verbose(`Match: ${santa.id} è il Santa di ${destinatario.id}`);
-		await bot.sendMessage(
-			santa.id,
-			`Il tuo destinatario del Secret Santa è 📤 <b>${destinatario.description}</b>. Gli dovrai fare un regalo, ma lui o lei non sa che sarai tu a farglielo!
+		logger.verbose(`Match: ${santa.description} [${santa.id}] è il Santa di ${destinatario.description} [${destinatario.id}]`);
+	}
+
+	// Must set sending_gifts to healthcheck correctly
+	state.set(StateEnum.STATE_SENDING_GIFTS);
+	const health_success = chainHealthcheck().success;
+
+	if (!health_success) {
+		await reply(msg, "Quick healthcheck: false! Non sono stati effettuati i match. Manda /status per verificare qual è l'errore.");
+		return;
+	}
+	await reply(msg, "Quick healthcheck: true. Puoi procedere a /match_send, o verificare i match con /status.");
+});
+
+bot.onText(/^\/match_send$/, async msg => {
+	if (matches.length == 0) {
+		await reply(msg, "I match non sono ancora stati fatti con /match!");
+		return;
+	}
+
+	const promises: Promise<any>[] = [];
+	for (let i = 0; i < matches.length; i++) {
+		const user = new User(matches[i]);
+		promises.push(bot.sendMessage(
+			user.id,
+			`Il tuo destinatario del Secret Santa è 📤 <b>${user.destinatario.description}</b>. Gli dovrai fare un regalo, ma lui o lei non sa che sarai tu a farglielo!
 
 Viceversa ti è stato assegnato un 🎅 <b>Secret Santa</b>, un utente misterioso che ti farà un regalo.
 
 Per parlare con il tuo 📤 destinatario o con il tuo 🎅 Santa, mandami semplicemente un messaggio. Puoi sempre mandare /help per consultare il calendario e le regole.`,
 			{parse_mode: "HTML"}
-		);
+		));
 	}
-	state.set(StateEnum.STATE_SENDING_GIFTS);
-	await reply(msg, "Fatto. Manda /status per verificare che non ci siano problemi.");
-	await reply(msg, "Quick healthcheck: " + chainHealthcheck().success);
+
+
+	try {
+		await Promise.all(promises);
+		state.set(StateEnum.STATE_SENDING_GIFTS);
+		await reply(msg, "Fatto. Manda /status per verificare che non ci siano problemi.");
+		await reply(msg, "Quick healthcheck: " + chainHealthcheck().success);
+	} catch (e) {
+		await reply(msg, "Si è verificato un errore: " + e);
+	}
+	
 });
 
 bot.onText(/^\/close$/, async msg => {
@@ -298,8 +285,7 @@ bot.onText(/^\/close$/, async msg => {
 	if (!state.conferma)
 		return reply(msg, `Stato non valido: impossibile chiudere le iscrizioni in ${state.get()}`);
 	const lateUsers = [];
-	for (const id of getUserIds()) {
-		const user = new User(id);
+	for (const user of allUsers()) {
 		if (user.isEarlySignedUp) {
 			bot.sendMessage(user.id, "La finestra per confermare la partecipazione al Secret Santa è chiusa, e la tua partecipazione è stata annullata.")
 			lateUsers.push(user.description);
@@ -314,9 +300,13 @@ bot.onText(/^\/broadcast$/, async msg => await reply(msg, "Sintassi: /broadcast 
 bot.onText(/^\/broadcast (.+)$/, async (msg, matches) => {
 	if (msg.from.id !== OWNER_ID) return;
 	const broadcast_content = matches[1];
-	for (const id of getUserIds())
-		await bot.sendMessage(id, broadcast_content, {parse_mode: "HTML"});
-	await reply(msg, "Fatto.");
+	const promises = allUserIds().map(id => bot.sendMessage(id, broadcast_content, {parse_mode: "HTML"}));
+	try {
+		await Promise.all(promises);
+		await reply(msg, "Fatto.");
+	} catch (e) {
+		await reply(msg, "Si è verificato un errore: " + e);
+	}
 });
 
 bot.onText(/^\/id$/, async msg => {
@@ -328,6 +318,8 @@ const messageQueue: {[user: number]: string} = {}
 const picsQueue: {[user: number]: string} = {}
 
 bot.on("text", msg => {
+	if (msg.chat.type != "private")
+		return;
 	logger.debug(msg.from.id + ": " + msg.text);
 	if (/^\//.test(msg.text)) return;
 	if (!state.sending_gifts) return;
@@ -346,6 +338,8 @@ bot.on("text", msg => {
 });
 
 bot.on("photo", async msg => {
+	if (msg.chat.type != "private")
+		return;
 	if (!("photo" in msg)) return;
 	if (!state.sending_gifts) return;
 	const author = new User(msg.from.id);

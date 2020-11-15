@@ -7,7 +7,7 @@ import TelegramBot = require("node-telegram-bot-api");
 import {logger} from "../logger";
 import {localStorage} from "../storage";
 
-export class User {
+export default class User {
 	localStorage: any
 	id: string
 
@@ -71,4 +71,12 @@ export class User {
 	set destinatario(destinatario: User) {
 		localStorage.setItem("destinatario_for_" + this.id, destinatario.id);
 	}
+}
+
+export function allUserIds(): string[] {
+	return localStorage._keys.filter(it => /^(early_)?[0-9]+$/.test(it)).map(it => it.replace(/^early_/, ""));
+}
+
+export function allUsers(): User[] {
+	return allUserIds().map(id => new User(id));
 }
